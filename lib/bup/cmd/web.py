@@ -8,6 +8,7 @@ from binascii import hexlify
 from bup import options, git, vfs
 from bup.helpers import (chunkyreader, debug1, format_filesize,
                          log, saved_errors)
+from bup.metadata import Metadata
 from bup.path import resource_path
 from bup.repo import LocalRepo
 from bup.io import path_msg
@@ -31,18 +32,82 @@ def http_date_from_utc_ns(utc_ns):
     return time.strftime('%a, %d %b %Y %H:%M:%S', time.gmtime(utc_ns / 10**9))
 
 
-def _compute_breadcrumbs(path, show_hidden=False):
+class QueryArgs:
+    __slots__ = (
+        'args',
+        'opts',
+        # arg names - also see below for types/defaults
+        'hidden',
+        'meta',
+        'hashes',
+        'hsizes',
+    )
+
+    def __init__(self, opts, **kw):
+        self.opts = opts
+        self.args = (
+            ('hidden', int, 0),
+            ('meta', int, 0),
+            ('hashes', int, 0),
+            ('hsizes', int, 1 if (opts and opts.human_readable) else 0),
+        )
+        for name, tp, default in self.args:
+            if name in kw:
+                setattr(self, name, tp(kw[name]))
+            else:
+                setattr(self, name, default)
+
+    @classmethod
+    def from_args(cls, opts, args):
+        new = QueryArgs(opts)
+        for name, tp, default in new.args:
+            try:
+                setattr(new, name, tp(args.get(name, [default])[-1]))
+            except ValueError:
+                pass
+        return new
+
+    def change(self, **kw):
+        new = QueryArgs(self.opts)
+        for name, tp, default in self.args:
+            if name in kw:
+                setattr(new, name, tp(kw[name]))
+            else:
+                setattr(new, name, getattr(self, name))
+        return new
+
+    def __radd__(self, v):
+        return v + bytes(self)
+
+    def __bytes__(self):
+        vals = []
+        fmts = {
+            int: b'%d',
+        }
+        for name, tp, default in self.args:
+            val = getattr(self, name)
+            if val != default:
+                fmt = fmts[tp]
+                n = name.encode('ascii')
+                vals.append(n + b'=' + fmt % val)
+        if not vals:
+            return b''
+        return b'?' + b'&'.join(vals)
+
+    def __str__(self):
+        return self.__bytes__().decode('ascii')
+
+
+def _compute_breadcrumbs(path, args):
     """Returns a list of breadcrumb objects for a path."""
     breadcrumbs = []
-    breadcrumbs.append((b'[root]', b'/'))
+    breadcrumbs.append((b'[root]', b'/' + args))
     path_parts = path.split(b'/')[1:-1]
     full_path = b'/'
     for part in path_parts:
         full_path += part + b"/"
         url_append = b""
-        if show_hidden:
-            url_append = b'?hidden=1'
-        breadcrumbs.append((part, full_path+url_append))
+        breadcrumbs.append((part, full_path + args))
     return breadcrumbs
 
 
@@ -59,10 +124,8 @@ def _contains_hidden_files(repo, dir_item):
     return False
 
 
-def _dir_contents(repo, resolution, show_hidden=False):
+def _dir_contents(repo, resolution, args):
     """Yield the display information for the contents of dir_item."""
-
-    url_query = b'?hidden=1' if show_hidden else b''
 
     def display_info(name, item, resolved_item, display_name=None, omitsize=False):
         global opt
@@ -75,7 +138,7 @@ def _dir_contents(repo, resolution, show_hidden=False):
 
         if not omitsize:
             size = vfs.item_size(repo, item)
-            if opt.human_readable:
+            if args.hsizes:
                 display_size = format_filesize(size)
             else:
                 display_size = size
@@ -93,19 +156,26 @@ def _dir_contents(repo, resolution, show_hidden=False):
             else:
                 display_name = name
 
-        return display_name, link + url_query, display_size
+        meta = resolved_item.meta
+        if not isinstance(meta, Metadata):
+            meta = None
+        try:
+            oidx = hexlify(resolved_item.oid)
+        except AttributeError:
+            oidx = ''
+        return display_name, link + args, display_size, meta, oidx
 
     dir_item = resolution[-1][1]
     for name, item in vfs.contents(repo, dir_item):
-        if not show_hidden:
+        if not args.hidden:
             if (name not in (b'.', b'..')) and name.startswith(b'.'):
                 continue
         if name == b'.':
             parent_item = resolution[-2][1] if len(resolution) > 1 else dir_item
             yield display_info(b'..', parent_item, parent_item, b'..', omitsize=True)
             continue
-        res_item = vfs.ensure_item_has_metadata(repo, item, include_size=True)
-        yield display_info(name, item, res_item)
+        res_item = vfs.ensure_item_has_metadata(repo, item, include_size=args.meta)
+        yield display_info(name, item, res_item, omitsize=not args.meta)
 
 
 class BupRequestHandler(tornado.web.RequestHandler):
@@ -146,25 +216,30 @@ class BupRequestHandler(tornado.web.RequestHandler):
         Return value is either a file object, or None (indicating an
         error).  In either case, the headers are sent.
         """
+        global opt
+        args = QueryArgs.from_args(opt, self.request.arguments)
+
         if not path.endswith(b'/') and len(path) > 0:
             print('Redirecting from %s to %s' % (path_msg(path), path_msg(path + b'/')))
-            return self.redirect(path + b'/', permanent=True)
-
-        hidden_arg = self.request.arguments.get('hidden', [0])[-1]
-        try:
-            show_hidden = int(hidden_arg)
-        except ValueError as e:
-            show_hidden = False
+            return self.redirect(path + b'/' + args, permanent=True)
 
         self.render(
             'list-directory.html',
             path=path,
-            breadcrumbs=_compute_breadcrumbs(path, show_hidden),
+            breadcrumbs=_compute_breadcrumbs(path, args),
             files_hidden=_contains_hidden_files(self.repo, resolution[-1][1]),
-            hidden_shown=show_hidden,
-            dir_contents=_dir_contents(self.repo, resolution,
-                                       show_hidden=show_hidden))
+            args=args,
+            dir_contents=_dir_contents(self.repo, resolution, args))
         return None
+
+    def _set_header(self, path, file_item):
+        meta = file_item.meta
+        ctype = self._guess_type(path)
+        assert len(file_item.oid) == 20
+        self.set_header("Last-Modified", http_date_from_utc_ns(meta.mtime))
+        self.set_header("Content-Type", ctype)
+        self.set_header("Etag", hexlify(file_item.oid))
+        self.set_header("Content-Length", str(meta.size))
 
     @gen.coroutine
     def _get_file(self, repo, path, resolved):
@@ -173,21 +248,27 @@ class BupRequestHandler(tornado.web.RequestHandler):
         Return value is either a file object, or None (indicating an error).
         In either case, the headers are sent.
         """
-        file_item = resolved[-1][1]
-        file_item = vfs.augment_item_meta(repo, file_item, include_size=True)
-        meta = file_item.meta
-        ctype = self._guess_type(path)
-        self.set_header("Last-Modified", http_date_from_utc_ns(meta.mtime))
-        self.set_header("Content-Type", ctype)
+        try:
+            file_item = resolved[-1][1]
+            file_item = vfs.augment_item_meta(repo, file_item, include_size=True)
 
-        self.set_header("Content-Length", str(meta.size))
-        assert len(file_item.oid) == 20
-        self.set_header("Etag", hexlify(file_item.oid))
-        if self.request.method != 'HEAD':
-            with vfs.fopen(self.repo, file_item) as f:
-                it = chunkyreader(f)
-                for blob in chunkyreader(f):
-                    self.write(blob)
+            # we defer the set_header() calls until after we start writing
+            # so we can still generate a 500 failure if something fails ...
+            if self.request.method != 'HEAD':
+                set_header = False
+                with vfs.fopen(self.repo, file_item) as f:
+                    it = chunkyreader(f)
+                    for blob in chunkyreader(f):
+                        if not set_header:
+                            self._set_header(path, file_item)
+                            set_header = True
+                        self.write(blob)
+            else:
+                self._set_header(path, file_item)
+        except Exception as e:
+            self.set_status(500)
+            self.write("<h1>Server Error</h1>\n")
+            self.write("%s: %s\n" % (e.__class__.__name__, str(e)))
         raise gen.Return()
 
     def _guess_type(self, path):
