@@ -1,83 +1,45 @@
-{% comment This template expects the default xhtml autoescaping. %}
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
-<html>
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-        <title>Directory listing for {{ path }}</title>
-        <link rel="stylesheet" href="/static/styles.css" />
-    </head>
-    <body>
-        <div id="wrapper">
-            <div id="breadcrumb">
-                {% for (display, part_path) in breadcrumbs %}
-                <a href="{{ part_path }}">{{ display }}</a> /
-                {% end %}
-            </div>
-            <div id="message">
-                {% if files_hidden %}
-                {% if args.hidden %}
-                    <a href=".{{ args.change(hidden=0) }}">Hide hidden files</a>
-                {% else %}
-                    <a href=".{{ args.change(hidden=1) }}">Show hidden files</a>
-                {% end %}
-                {% end %}
-                {% if args.meta %}
-                    <a href=".{{ args.change(meta=0) }}">Hide metadata</a>
-                {% else %}
-                    <a href=".{{ args.change(meta=1) }}">Show metadata</a>
-                {% end %}
-                {% if args.hashes %}
-                    <a href=".{{ args.change(hashes=0) }}">Hide hashes</a>
-                {% else %}
-                    <a href=".{{ args.change(hashes=1) }}">Show hashes</a>
-                {% end %}
-                {% if args.hsizes %}
-                    <a href=".{{ args.change(hsizes=0) }}">Show sizes as bytes</a>
-                {% else %}
-                    <a href=".{{ args.change(hsizes=1) }}">Show readable sizes</a>
-                {% end %}
-            </div>
-            <table>
-                <tr>
-                    {% if args.hashes %}
-                        <th class="dir-hash">Hash</th>
-                    {% end %}
-                    {% if args.meta %}
-                        <th class="dir-meta-mode">Mode</th>
-                        <th class="dir-meta-owner" colspan="2">Owner</th>
-                        <th class="dir-meta-group" colspan="2">Group</th>
-                    {% end %}
-                    <th class="dir-size">Size</th>
-                    {% if args.meta %}
-                        <th class="dir-meta-mtime">Last modified</th>
-                    {% end %}
-                    <th class="dir-name">Name</th>
-                </tr>
-                {% for (display, link, size, meta, oid) in dir_contents %}
-                <tr>
-                    {% if args.hashes %}
-                        <td class="dir-hash">{{ oid }}</td>
-                    {% end %}
-                    {% if args.meta %}
-                        <td class="dir-meta-mode">{% if meta is not None %}{{ meta.mode_str }}{% end %}</td>
-                        <td class="dir-meta-owner">{% if meta is not None and meta.user is not None %}{{ meta.user }}{% end %}</td>
-                        <td class="dir-meta-uid">{% if meta is not None and meta.uid is not None %}{{ meta.uid }}{% end %}</td>
-                        <td class="dir-meta-group">{% if meta is not None and meta.group is not None %}{{ meta.group }}{% end %}</td>
-                        <td class="dir-meta-gid">{% if meta is not None and meta.gid is not None %}{{ meta.gid }}{% end %}</td>
-                    {% end %}
-                    <td class="dir-size">{% if size is not None %}{{ size }}{% end %}</td>
-                    {% if args.meta %}
-                        <td class="dir-meta-mtime">{% if meta is not None and meta.mtime_str is not None %}{{ meta.mtime_str }}{% end %}</td>
-                    {% end %}
-                    <td class="dir-name">
-                      <a href="{% raw link %}">{{ display }}</a>
-                      {% if args.meta %}
-                        {% if meta is not None and meta.symlink_target %} &#8594; {{ meta.symlink_target }}{% end %}
-                      {% end %}
-                    </td>
-                </tr>
-                {% end %}
-            </table>
-        </div>
-    </body>
-</html>
+<!DOCTYPE html>{%
+comment This template expects the default xhtml autoescaping. %}
+<html lang="en">
+<meta charset="utf-8">
+<title>Directory listing for {{ path }}</title>
+<link rel="stylesheet" href="/static/styles.css">
+
+<div id="wrapper">
+<div id="breadcrumb">{% for (display, part_path) in breadcrumbs %}
+<a href="{{ part_path }}">{{ display }}</a> /{% end %}
+</div>
+
+<div id="message">{% if files_hidden %}
+<a href=".{{ args.change(hidden = not args.hidden) }}">{{ ["Show", "Hide"][args.hidden] }} hidden files</a>{% end %}
+<a href=".{{ args.change(meta = not args.meta) }}">{{ ["Show", "Hide"][args.hidden] }} metadata</a>
+<a href=".{{ args.change(hashes = not args.hashes) }}">{{ ["Show", "Hide"][args.hidden] }} hashes</a>
+<a href=".{{ args.change(hsizes = not args.hsizes) }}">Show {{ ["readable sizes", "sizes as bytes"][args.hsizes] }}</a>
+</div>
+
+<table>
+	<tr>
+		{% if args.hashes %}<th class="dir-hash">Hash</th>
+		{% end %}{% if args.meta %}<th class="dir-meta-mode">Mode</th>
+		<th class="dir-meta-owner" colspan="2">Owner</th>
+		<th class="dir-meta-group" colspan="2">Group</th>
+		{% end %}<th class="dir-size">Size</th>
+		{% if args.meta %}<th class="dir-meta-mtime">Last modified</th>
+		{% end %}<th class="dir-name">Name</th>
+	</tr>
+
+	{% for (name, suffix, link, size, meta, oid) in dir_contents %}
+	<tr>
+		{% if args.hashes %}<td class="dir-hash">{{ oid }}</td>
+		{% end %}{% if args.meta %}<td class="dir-meta-mode">{% if meta is not None %}{{ meta.mode_str }}{% end %}</td>
+		<td class="dir-meta-owner">{% if meta is not None and meta.user is not None %}{{ meta.user }}{% end %}</td>
+		<td class="dir-meta-uid">{% if meta is not None and meta.uid is not None %}{{ meta.uid }}{% end %}</td>
+		<td class="dir-meta-group">{% if meta is not None and meta.group is not None %}{{ meta.group }}{% end %}</td>
+		<td class="dir-meta-gid">{% if meta is not None and meta.gid is not None %}{{ meta.gid }}{% end %}</td>
+		{% end %}<td class="dir-size">{% if size is not None %}{{ size }}{% end %}</td>
+		{% if args.meta %}<td class="dir-meta-mtime">{% if meta is not None and meta.mtime_str is not None %}{{ meta.mtime_str }}{% end %}</td>
+		{% end %}<td class="dir-name"><a href="{% raw link %}">{{ name }}</a>{{ suffix }}{% if args.meta and meta is not None and meta.symlink_target %} → {{ meta.symlink_target }}{% end %}</td>
+	</tr>
+	{% end %}
+</table>
+</div>

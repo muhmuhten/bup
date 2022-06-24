@@ -46,9 +46,9 @@ class QueryArgs:
     def __init__(self, opts, **kw):
         self.opts = opts
         self.args = (
-            ('hidden', int, 0),
-            ('meta', int, 0),
-            ('hashes', int, 0),
+            ('hidden', int, 1 if (opts and opts.hidden) else 0),
+            ('meta', int, 1 if (opts and opts.meta) else 0),
+            ('hashes', int, 1 if (opts and opts.hashes) else 0),
             ('hsizes', int, 1 if (opts and opts.human_readable) else 0),
         )
         for name, tp, default in self.args:
@@ -127,14 +127,13 @@ def _contains_hidden_files(repo, dir_item):
 def _dir_contents(repo, resolution, args):
     """Yield the display information for the contents of dir_item."""
 
-    def display_info(name, item, resolved_item, display_name=None, omitsize=False):
+    def display_info(name, item, resolved_item, display_suffix=None, omitsize=False):
         global opt
         # link should be based on fully resolved type to avoid extra
         # HTTP redirect.
-        link = tornado.escape.url_escape(name, plus=False)
+        link = tornado.escape.url_escape(name, plus=False).encode('ascii')
         if stat.S_ISDIR(vfs.item_mode(resolved_item)):
-            link += '/'
-        link = link.encode('ascii')
+            link += b'/' + args
 
         if not omitsize:
             size = vfs.item_size(repo, item)
@@ -145,16 +144,15 @@ def _dir_contents(repo, resolution, args):
         else:
             display_size = None
 
-        if not display_name:
+        if display_suffix is None:
             mode = vfs.item_mode(item)
             if stat.S_ISDIR(mode):
-                display_name = name + b'/'
+                display_suffix = b'/'
                 display_size = None
             elif stat.S_ISLNK(mode):
-                display_name = name + b'@'
-                display_size = None
+                display_suffix = b'@'
             else:
-                display_name = name
+                display_suffix = b''
 
         meta = resolved_item.meta
         if not isinstance(meta, Metadata):
@@ -163,7 +161,7 @@ def _dir_contents(repo, resolution, args):
             oidx = hexlify(resolved_item.oid)
         except AttributeError:
             oidx = ''
-        return display_name, link + args, display_size, meta, oidx
+        return name, display_suffix, link, display_size, meta, oidx
 
     dir_item = resolution[-1][1]
     for name, item in vfs.contents(repo, dir_item):
@@ -172,7 +170,7 @@ def _dir_contents(repo, resolution, args):
                 continue
         if name == b'.':
             parent_item = resolution[-2][1] if len(resolution) > 1 else dir_item
-            yield display_info(b'..', parent_item, parent_item, b'..', omitsize=True)
+            yield display_info(b'..', parent_item, parent_item, b'', omitsize=True)
             continue
         res_item = vfs.ensure_item_has_metadata(repo, item, include_size=args.meta)
         yield display_info(name, item, res_item, omitsize=not args.meta)
@@ -319,7 +317,10 @@ optspec = """
 bup web [[hostname]:port]
 bup web unix://path
 --
-human-readable    display human readable file sizes (i.e. 3.9K, 4.7M)
+hashes            report hashes by default
+hidden            show hidden files by default
+human-readable    display human readable file sizes (i.e. 3.9K, 4.7M) by default
+meta              report original metadata for paths by default when available
 browser           show repository in default browser (incompatible with unix://)
 """
 
